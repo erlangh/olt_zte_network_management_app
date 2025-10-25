@@ -70,6 +70,8 @@ if ! sudo -u postgres bash -c "cd ~; psql -tAc \"SELECT 1 FROM pg_database WHERE
 fi
 # Ensure privileges
 sudo -u postgres bash -c "cd ~; psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" || true
+# Ensure password matches the .env configuration
+sudo -u postgres bash -c "cd ~; psql -c \"ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';\"" || true
 
 echo "Step 6: Creating application directory..."
 mkdir -p $APP_DIR
