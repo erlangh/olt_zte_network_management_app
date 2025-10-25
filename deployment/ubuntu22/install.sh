@@ -145,9 +145,9 @@ PYEOF
 echo "Step 11: Building frontend..."
 cd $APP_DIR/frontend
 sudo -u $APP_USER npm install
-SERVER_IP=$(hostname -I | awk '{print $1}')
+# Use relative API base to avoid mixed-content issues under HTTPS
 cat > $APP_DIR/frontend/.env << EOF
-VITE_API_URL=http://$SERVER_IP/api/v1
+VITE_API_URL=/api/v1
 EOF
 sudo -u $APP_USER npm run build
 
