@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.database import get_db
+from app.db.database import get_db
 from app.models.olt import OLT, Slot, Port
 from app.models.onu import ONU
 from app.services.snmp_client import SNMPClient
@@ -16,7 +16,12 @@ def discover_onus(olt_id: int, db: Session = Depends(get_db)):
     if not olt:
         raise HTTPException(status_code=404, detail="OLT not found")
 
-    client = SNMPClient(host=olt.host, community=olt.community)
+    client = SNMPClient(
+        host=olt.ip_address,
+        community=olt.snmp_community,
+        port=olt.snmp_port,
+        version=olt.snmp_version,
+    )
 
     # Walk ONUs via SNMP
     discovered = client.get_onu_list()
@@ -52,11 +57,11 @@ def discover_onus(olt_id: int, db: Session = Depends(get_db)):
         # Create or get Port (decoded port number)
         port = (
             db.query(Port)
-            .filter(Port.olt_id == olt.id, Port.slot_id == slot.id, Port.port_number == port_no)
+            .filter(Port.slot_id == slot.id, Port.port_number == port_no)
             .first()
         )
         if not port:
-            port = Port(olt_id=olt.id, slot_id=slot.id, port_number=port_no)
+            port = Port(slot_id=slot.id, port_number=port_no)
             db.add(port)
             db.flush()
 
