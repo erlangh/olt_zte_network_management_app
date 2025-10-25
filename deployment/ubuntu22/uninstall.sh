@@ -47,10 +47,10 @@ rm -rf $APP_DIR
 echo "Step 5: Removing database..."
 read -p "Remove PostgreSQL database? (yes/no): " remove_db
 if [ "$remove_db" = "yes" ]; then
-    sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
-    sudo -u postgres psql -c "DROP USER IF EXISTS $DB_USER;"
-    echo "Database removed"
-fi
+        sudo -u postgres bash -c "cd ~; psql -c \"DROP DATABASE IF EXISTS $DB_NAME;\""
+        sudo -u postgres bash -c "cd ~; psql -c \"DROP USER IF EXISTS $DB_USER;\""
+        echo "Database removed"
+    fi
 
 echo "Step 6: Removing user..."
 read -p "Remove application user ($APP_USER)? (yes/no): " remove_user

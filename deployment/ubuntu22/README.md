@@ -181,11 +181,17 @@ sudo nano /opt/olt_management/backend/.env
 Common settings:
 ```env
 # Database
-DATABASE_URL=postgresql://user:pass@localhost:5432/dbname
+# IMPORTANT: Use URL-encoded password if it contains special characters
+# Example encode command: python3.11 -c "import urllib.parse; print(urllib.parse.quote('<your-password>', safe=''))"
+DATABASE_URL=postgresql://user:%ENCODED_PASS%@localhost:5432/dbname
 
 # Security
 SECRET_KEY=<your-secret-key>
 ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# CORS
+# ALLOWED_ORIGINS must be a valid JSON array
+ALLOWED_ORIGINS=["http://<server-ip>","http://localhost","http://127.0.0.1"]
 
 # SNMP Settings
 DEFAULT_SNMP_VERSION=2c
@@ -407,7 +413,7 @@ sudo netstat -tulpn | grep :80
 sudo systemctl status postgresql
 
 # Check connection
-sudo -u postgres psql -c "SELECT version();"
+sudo -u postgres bash -c "cd ~; psql -c \"SELECT version();\""
 
 # Restart PostgreSQL
 sudo systemctl restart postgresql

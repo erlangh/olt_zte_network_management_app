@@ -23,7 +23,7 @@ APP_USER="oltuser"
 DB_NAME="olt_management"
 DB_USER="olt_user"
 DB_PASS=$(openssl rand -base64 32)
-SECRET_KEY=$(openssl rand -base64 64)
+SECRET_KEY=$(openssl rand -base64 64 | tr -d '\n')
 
 echo "Step 1: Updating system packages..."
 apt update
@@ -31,17 +31,20 @@ apt upgrade -y
 
 echo "Step 2: Installing system dependencies..."
 apt install -y \
-    python3.11 \
-    python3.11-venv \
-    python3-pip \
+    software-properties-common \
+    curl \
+    git \
+    build-essential \
+    nginx \
     postgresql \
     postgresql-contrib \
-    nginx \
-    git \
-    curl \
-    build-essential \
     snmp \
     snmpd
+
+echo "Step 2.1: Enabling Python 3.11 repository..."
+add-apt-repository ppa:deadsnakes/ppa -y
+apt update
+apt install -y python3.11 python3.11-venv python3-pip
 
 # Install Node.js 18.x
 echo "Step 3: Installing Node.js..."
@@ -57,14 +60,23 @@ else
 fi
 
 echo "Step 5: Setting up PostgreSQL database..."
-sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" || true
-sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" || true
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;" || true
+# Create role if not exists (robust check, quiet CWD warnings)
+if ! sudo -u postgres bash -c "cd ~; psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'\" | grep -q 1"; then
+    sudo -u postgres bash -c "cd ~; psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';\""
+fi
+# Create database if not exists and set owner
+if ! sudo -u postgres bash -c "cd ~; psql -tAc \"SELECT 1 FROM pg_database WHERE datname='$DB_NAME'\" | grep -q 1"; then
+    sudo -u postgres bash -c "cd ~; psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER;\""
+fi
+# Ensure privileges
+sudo -u postgres bash -c "cd ~; psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" || true
 
 echo "Step 6: Creating application directory..."
 mkdir -p $APP_DIR
-cp -r $(pwd)/backend $APP_DIR/
-cp -r $(pwd)/frontend $APP_DIR/
+# Navigate to project root (2 levels up from deployment/ubuntu22)
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cp -r $PROJECT_ROOT/backend $APP_DIR/
+cp -r $PROJECT_ROOT/frontend $APP_DIR/
 
 # Set ownership
 chown -R $APP_USER:$APP_USER $APP_DIR
@@ -76,8 +88,11 @@ sudo -u $APP_USER .venv/bin/pip install --upgrade pip
 sudo -u $APP_USER .venv/bin/pip install -r requirements.txt
 
 echo "Step 8: Configuring backend environment..."
+SERVER_IP=$(hostname -I | awk '{print $1}')
+# URL-encode DB_PASS for use in DATABASE_URL (requires Python 3.11 installed above)
+ENC_DB_PASS=$(python3.11 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$DB_PASS")
 cat > $APP_DIR/backend/.env << EOF
-DATABASE_URL=postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME
+DATABASE_URL=postgresql://$DB_USER:$ENC_DB_PASS@localhost:5432/$DB_NAME
 APP_NAME=OLT ZTE C320 Management System
 APP_VERSION=1.0.0
 DEBUG=False
@@ -85,7 +100,7 @@ API_PREFIX=/api/v1
 SECRET_KEY=$SECRET_KEY
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
-ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
+ALLOWED_ORIGINS=["http://$SERVER_IP","http://localhost","http://127.0.0.1"]
 DEFAULT_SNMP_VERSION=2c
 DEFAULT_SNMP_PORT=161
 DEFAULT_TELNET_PORT=23
@@ -128,8 +143,9 @@ PYEOF
 echo "Step 11: Building frontend..."
 cd $APP_DIR/frontend
 sudo -u $APP_USER npm install
+SERVER_IP=$(hostname -I | awk '{print $1}')
 cat > $APP_DIR/frontend/.env << EOF
-VITE_API_URL=http://localhost/api/v1
+VITE_API_URL=http://$SERVER_IP/api/v1
 EOF
 sudo -u $APP_USER npm run build
 
@@ -172,7 +188,7 @@ Type=simple
 User=$APP_USER
 Group=$APP_USER
 WorkingDirectory=$APP_DIR/backend
-Environment="PATH=$APP_DIR/backend/.venv/bin"
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:$APP_DIR/backend/.venv/bin"
 ExecStart=$APP_DIR/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=10
