@@ -26,7 +26,7 @@ def discover_onus(olt_id: int, db: Session = Depends(get_db)):
     created = 0
     updated = 0
 
-    # Ensure Slot and Port exist; then upsert ONU using SN
+    # Ensure Slot and Port exist; then upsert ONU using SN (fallback to composite key)
     for item in discovered:
         slot_no = item["slot"]
         port_no = item["port"]
@@ -37,9 +37,6 @@ def discover_onus(olt_id: int, db: Session = Depends(get_db)):
         # Fetch details using raw suffix (ZTE encodes port index)
         details = client.get_onu_details_suffix(suffix_raw)
         sn = details.get("sn")
-        if not sn:
-            # Skip if SN missing; cannot upsert reliably
-            continue
 
         # Create or get Slot
         slot = (
@@ -63,7 +60,11 @@ def discover_onus(olt_id: int, db: Session = Depends(get_db)):
             db.add(port)
             db.flush()
 
-        # Upsert ONU by serial number
+        # Fallback: if SN is missing, synthesize a unique key
+        if not sn:
+            sn = f"UNKNOWN-{slot_no}-{port_no}-{onu_id}"
+
+        # Upsert ONU by serial number (or synthesized key)
         onu = db.query(ONU).filter(ONU.sn == sn).first()
         if onu:
             # Update existing ONU
