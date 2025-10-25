@@ -28,4 +28,7 @@ def get_db():
 
 def init_db():
     """Initialize database - create all tables"""
+    # Ensure all models are imported so their tables are registered
+    # Importing the package loads model modules and attaches tables to Base.metadata
+    import app.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
