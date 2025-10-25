@@ -144,27 +144,20 @@ def refresh_onu_status(onu_id: int, db: Session = Depends(get_db)):
             except:
                 pass
         
-        if details.get("distance"):
-            try:
-                db_onu.distance = int(details["distance"])
-            except:
-                pass
-        
-        db_onu.updated_at = datetime.now()
         db.commit()
         db.refresh(db_onu)
     
-    return db_onu
+    return {"message": "ONU refreshed"}
 
 
 @router.get("/olt/{olt_id}/discover")
 def discover_onus(olt_id: int, db: Session = Depends(get_db)):
-    """Discover ONUs on OLT"""
+    """Discover ONUs on OLT and persist them"""
+    from app.models.olt import Slot, Port  # local import to avoid circulars
     olt = db.query(OLTModel).filter(OLTModel.id == olt_id).first()
     if not olt:
         raise HTTPException(status_code=404, detail="OLT not found")
     
-    # Create SNMP client
     snmp = SNMPClient(
         host=olt.ip_address,
         community=olt.snmp_community,
@@ -172,18 +165,87 @@ def discover_onus(olt_id: int, db: Session = Depends(get_db)):
         version=olt.snmp_version
     )
     
-    # Test connection
     if not snmp.test_connection():
-        raise HTTPException(
-            status_code=503,
-            detail="Cannot connect to OLT"
-        )
+        raise HTTPException(status_code=503, detail="Cannot connect to OLT")
     
-    # Get ONU list
-    onus = snmp.get_onu_list()
+    discovered = snmp.get_onu_list()
+    created = 0
+    updated = 0
+    errors = 0
+    
+    for item in discovered:
+        try:
+            slot_num = int(item.get("slot"))
+            port_num = int(item.get("port"))
+            onu_id = int(item.get("onu_id"))
+            
+            slot = db.query(Slot).filter(Slot.olt_id == olt.id, Slot.slot_number == slot_num).first()
+            if not slot:
+                slot = Slot(olt_id=olt.id, slot_number=slot_num, status="online")
+                db.add(slot)
+                db.flush()
+            
+            port = db.query(Port).filter(Port.slot_id == slot.id, Port.port_number == port_num).first()
+            if not port:
+                port = Port(slot_id=slot.id, port_number=port_num, status="up")
+                db.add(port)
+                db.flush()
+            
+            details = snmp.get_onu_details(slot_num, port_num, onu_id) or {}
+            sn = details.get("sn")
+            if not sn:
+                # Skip if serial number cannot be read (column is non-null)
+                continue
+            
+            existing = db.query(ONUModel).filter(ONUModel.sn == sn).first()
+            status_val = details.get("status")
+            status_str = "online" if status_val == "1" else "offline"
+            
+            if existing:
+                existing.port_id = port.id
+                existing.olt_id = olt.id
+                existing.onu_id = onu_id
+                existing.status = status_str
+                try:
+                    if details.get("rx_power") is not None:
+                        existing.rx_power = float(details["rx_power"])
+                    if details.get("tx_power") is not None:
+                        existing.tx_power = float(details["tx_power"])
+                    if details.get("distance") is not None:
+                        existing.distance = int(float(details["distance"]))
+                except Exception:
+                    pass
+                updated += 1
+            else:
+                db_onu = ONUModel(
+                    sn=sn,
+                    olt_id=olt.id,
+                    port_id=port.id,
+                    onu_id=onu_id,
+                    status=status_str,
+                    auth_status="unauthorized"
+                )
+                try:
+                    if details.get("rx_power") is not None:
+                        db_onu.rx_power = float(details["rx_power"])
+                    if details.get("tx_power") is not None:
+                        db_onu.tx_power = float(details["tx_power"])
+                    if details.get("distance") is not None:
+                        db_onu.distance = int(float(details["distance"]))
+                except Exception:
+                    pass
+                db.add(db_onu)
+                created += 1
+        except Exception:
+            errors += 1
+            continue
+    
+    db.commit()
     
     return {
         "olt_id": olt_id,
-        "onus_discovered": len(onus),
-        "onus": onus
+        "onus_discovered": len(discovered),
+        "onus_created": created,
+        "onus_updated": updated,
+        "errors": errors
     }
